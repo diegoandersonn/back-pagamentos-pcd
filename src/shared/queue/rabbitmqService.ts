@@ -7,6 +7,8 @@ import QueueMessageType from "../types/queueMessageType";
 
 const RABBITMQ_URL = process.env.RABBITMQ_URL ?? "amqp://localhost";
 const EXCHANGE_NAME = "pcd_eventos";
+const CONNECTION_RETRIES = Number(process.env.RABBITMQ_CONNECTION_RETRIES ?? 30);
+const CONNECTION_RETRY_DELAY_MS = Number(process.env.RABBITMQ_CONNECTION_RETRY_DELAY_MS ?? 2000);
 const SERVICE_NAME = process.env.SERVICE_NAME ?? process.env.npm_package_name ?? `pcd-${process.pid}`;
 const QUEUE_NAME = `${EXCHANGE_NAME}.${SERVICE_NAME}`;
 
@@ -16,6 +18,12 @@ let channel: Channel | undefined;
 const handlers = new Map<QueueEventType, QueueHandler[]>();
 const queueMessages: QueueMessageType[] = [];
 const queueMessagesMutex = new AsyncMutex();
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 export async function listQueueMessages(): Promise<QueueMessageType[]> {
   return queueMessagesMutex.runExclusive(() => queueMessages.map((message) => ({ ...message })));
@@ -28,23 +36,33 @@ export function subscribeToQueue<T>(event: QueueEventType, handler: QueueHandler
 }
 
 export async function connectQueue(): Promise<boolean> {
-  try {
-    const connection = await amqp.connect(RABBITMQ_URL);
-    channel = await connection.createChannel();
+  for (let attempt = 1; attempt <= CONNECTION_RETRIES; attempt += 1) {
+    try {
+      const connection = await amqp.connect(RABBITMQ_URL);
+      channel = await connection.createChannel();
 
-    await channel.assertExchange(EXCHANGE_NAME, "fanout", { durable: false });
-    await channel.assertQueue(QUEUE_NAME, { durable: false });
-    await channel.bindQueue(QUEUE_NAME, EXCHANGE_NAME, "");
-    await channel.prefetch(1);
-    await channel.consume(QUEUE_NAME, handleRabbitMessage);
+      await channel.assertExchange(EXCHANGE_NAME, "fanout", { durable: false });
+      await channel.assertQueue(QUEUE_NAME, { durable: false });
+      await channel.bindQueue(QUEUE_NAME, EXCHANGE_NAME, "");
+      await channel.prefetch(1);
+      await channel.consume(QUEUE_NAME, handleRabbitMessage);
 
-    console.log(`RabbitMQ conectado e fila ${QUEUE_NAME} pronta.`);
-    return true;
-  } catch (_error) {
-    channel = undefined;
-    console.warn("RabbitMQ indisponivel. Usando fila assincrona em memoria.");
-    return false;
+      console.log(`RabbitMQ conectado e fila ${QUEUE_NAME} pronta.`);
+      return true;
+    } catch (_error) {
+      channel = undefined;
+
+      if (attempt < CONNECTION_RETRIES) {
+        console.warn(`RabbitMQ indisponivel. Tentando novamente (${attempt}/${CONNECTION_RETRIES})...`);
+        await wait(CONNECTION_RETRY_DELAY_MS);
+      }
+    }
   }
+
+  console.warn(
+    "RabbitMQ indisponivel. Usando fila assincrona em memoria; eventos nao serao compartilhados entre microservicos.",
+  );
+  return false;
 }
 
 export async function publishQueueMessage<T>(event: QueueEventType, data: T): Promise<QueueMessageType<T>> {

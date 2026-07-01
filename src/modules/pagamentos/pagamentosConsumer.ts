@@ -6,6 +6,8 @@ import type PagamentoType from "./pagamentosTypes";
 
 export function registerPagamentosConsumers(): void {
   subscribeToQueue<MensagemPedidoType>("pedido.criado", async (message) => {
+    console.log("Pedido recebido para pagamento:", message.data.pedido.id);
+
     const pagamento = await iniciarPagamento(message.data);
 
     await publishQueueMessage("pagamento.processando", pagamento);
@@ -15,8 +17,11 @@ export function registerPagamentosConsumers(): void {
     const pagamentoFinalizado = await finalizarPagamento(pagamento.id);
 
     if (!pagamentoFinalizado) {
+      console.warn("Pagamento nao encontrado para finalizar:", pagamento.id);
       return;
     }
+
+    console.log("Pagamento finalizado:", pagamentoFinalizado.id, pagamentoFinalizado.status);
 
     await publishQueueMessage(
       pagamentoFinalizado.status === "Aprovado" ? "pagamento.aprovado" : "pagamento.recusado",
