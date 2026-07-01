@@ -1,8 +1,7 @@
-import path from "node:path";
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 
-const PROTO_PATH = path.resolve(process.cwd(), "..", "proto", "pcd.proto");
+const PROTO_PATH = process.env.PROTO_PATH ?? "/proto/pcd.proto";
 
 type ServiceDefinition = grpc.ServiceDefinition<grpc.UntypedServiceImplementation>;
 
